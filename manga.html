@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmic Manga & Anime Tracker</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cosmic: {
+                            50: '#faf5ff',
+                            100: '#f3e8ff',
+                            200: '#e9d5ff',
+                            300: '#d8b4fe',
+                            400: '#c084fc',
+                            500: '#a855f7',
+                            600: '#9333ea',
+                            700: '#7c3aed',
+                            800: '#6b21a8',
+                            900: '#581c87',
+                        },
+                        nebula: {
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            700: '#6d28d9',
+                        }
+                    },
+                    fontFamily: {
+                        'inter': ['Inter', 'sans-serif'],
+                    },
+                    animation: {
+                        'float': 'float 6s ease-in-out infinite',
+                        'glow': 'glow 2s ease-in-out infinite alternate',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        },
+                        glow: {
+                            '0%': { boxShadow: '0 0 5px #a855f7, 0 0 10px #a855f7' },
+                            '100%': { boxShadow: '0 0 20px #a855f7, 0 0 30px #a855f7' },
+                        }
+                    },
+                    backdropBlur: {
+                        xs: '2px',
+                    }
+                },
+            },
+        }
+    </script>
+    <style>
+        .glass {
+            backdrop-filter: blur(16px);
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #c084fc 0%, #a855f7 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-cosmic-900 via-purple-900 to-indigo-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // Types
+        const MediaItem = (id, name, link, status, dateAdded, imageUrl, rating, type) => ({
+            id, name, link, status, dateAdded, imageUrl, rating, type
+        });
+
+        const Achievement = (id, name, description, icon, earned, condition) => ({
+            id, name, description, icon, earned, condition
+        });
+
+        const SearchResult = (mal_id, title, images, type, episodes, chapters, score, url) => ({
+            mal_id, title, images, type, episodes, chapters, score, url
+        });
+
+        // Achievement Definitions
+        const ACHIEVEMENTS = [
+            Achievement(
+                'first_add',
+                'First Step',
+                'Add your first item to the list',
+                '📖',
+                false,
+                (items) => items.length >= 1
+            ),
+            Achievement(
+                'five_items',
+                'Growing Collection',
+                'Add 5 items to your list',
+                '📚',
+                false,
+                (items) => items.length >= 5
+            ),
+            Achievement(
+                'ten_items',
+                'Seasoned Collector',
+                'Add 10 items to your list',
+                '🏆',
+                false,
+                (items) => items.length >= 10
+            ),
+            Achievement(
+                'first_completed',
+                'Completionist',
+                'Mark your first item as completed',
+                '✅',
+                false,
+                (items) => items.some(item => item.status === 'completed')
+            ),
+            Achievement(
+                'all_completed',
+                'Master Finisher',
+                'Complete all items in your list',
+                '🎯',
+                false,
+                (items) => items.length > 0 && items.every(item => item.status === 'completed')
+            ),
+            Achievement(
+                'social_share',
+                'Social Butterfly',
+                'Share your list with others',
+                '📤',
+                false,
+                (items, achievements) => achievements.includes('social_share')
+            ),
+            Achievement(
+                'variety',
+                'Variety Seeker',
+                'Have items in all three status categories',
+                '🌈',
+                false,
+                (items) => {
+                    const statuses = new Set(items.map(item => item.status));
+                    return statuses.has('watching') && statuses.has('completed') && statuses.has('later');
+                }
+            )
+        ];
+
+        // Custom Hooks
+        const useLocalStorage = (key, initialValue) => {
+            const [storedValue, setStoredValue] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(key);
+                    return item ? JSON.parse(item) : initialValue;
+                } catch (error) {
+                    return initialValue;
+                }
+            });
+
+            const setValue = (value) => {
+                try {
+                    const valueToStore = value instanceof Function ? value(storedValue) : value;
+                    setStoredValue(valueToStore);
+                    window.localStorage.setItem(key, JSON.stringify(valueToStore));
+                } catch (error) {
+                    console.error(`Error setting localStorage key "${key}":`, error);
+                }
+            };
+
+            return [storedValue, setValue];
+        };
+
+        const useAchievements = (items, achievements, onUnlock) => {
+            useEffect(() => {
+                ACHIEVEMENTS.forEach(achievement => {
+                    if (!achievements.includes(achievement.id) && achievement.condition(items, achievements)) {
+                        onUnlock(achievement.id);
+                    }
+                });
+            }, [items, achievements, onUnlock]);
+        };
+
+        // API Functions
+        const searchMedia = async (query) => {
+            try {
+                const JIKAN_API_BASE = 'https://api.jikan.moe/v4';
+                const [animeResponse, mangaResponse] = await Promise.all([
+                    fetch(`${JIKAN_API_BASE}/anime?q=${encodeURIComponent(query)}&limit=5`),
+                    fetch(`${JIKAN_API_BASE}/manga?q=${encodeURIComponent(query)}&limit=5`)
+                ]);
+
+                const animeData = await animeResponse.json();
+                const mangaData = await mangaResponse.json();
+
+                return [
+                    ...(animeData.data || []).map(item => ({ ...item, type: 'anime' })),
+                    ...(mangaData.data || []).map(item => ({ ...item, type: 'manga' }))
+                ].sort((a, b) => (b.score || 0) - (a.score || 0));
+            } catch (error) {
+                console.error('Search error:', error);
+                return [];
+            }
+        };
+
+        const getMediaDetails = async (id, type) => {
+            try {
+                const JIKAN_API_BASE = 'https://api.jikan.moe/v4';
+                const response = await fetch(`${JIKAN_API_BASE}/${type}/${id}/full`);
+                const data = await response.json();
+                return data.data;
+            } catch (error) {
+                console.error('Details error:', error);
+                return null;
+            }
+        };
+
+        // UI Components
+        const GlassCard = ({ children, className = '' }) => (
+            <div className={`glass rounded-xl p-6 ${className}`}>
+                {children}
+            </div>
+        );
+
+        const AnimatedButton = ({ children, onClick, variant = 'primary', className = '' }) => {
+            const baseClasses = "px-6 py-3 rounded-lg font-semibold transition-all duration-300 transform hover:scale-105 active:scale-95";
+            const variantClasses = {
+                primary: "bg-gradient-to-r from-cosmic-500 to-cosmic-600 hover:from-cosmic-600 hover:to-cosmic-700 text-white shadow-lg hover:shadow-xl",
+                secondary: "bg-white/10 border border-white/20 text-white hover:bg-white/20",
+                success: "bg-gradient-to-r from-green-500 to-emerald-600 text-white",
+                danger: "bg-gradient-to-r from-red-500 to-pink-600 text-white"
+            };
+
+            return (
+                <button 
+                    className={`${baseClasses} ${variantClasses[variant]} ${className}`}
+                    onClick={onClick}
+                >
+                    {children}
+                </button>
+            );
+        };
+
+        const StatusBadge = ({ status }) => {
+            const statusConfig = {
+                watching: { text: 'Watching/Reading', color: 'bg-green-500/20 text-green-400' },
+                completed: { text: 'Completed', color: 'bg-yellow-500/20 text-yellow-400' },
+                later: { text: 'Watch Later', color: 'bg-gray-500/20 text-gray-400' }
+            };
+            
+            const config = statusConfig[status] || statusConfig.later;
+            
+            return (
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${config.color}`}>
+                    {config.text}
+                </span>
+            );
+        };
+
+        // Main Components
+        const Header = () => (
+            <header className="text-center mb-8">
+                <h1 className="text-5xl font-bold gradient-text mb-4 animate-float">Cosmic Manga Tracker</h1>
+                <p className="text-cosmic-200 text-xl">Organize your anime, manga, manhua, and manhwa collection</p>
+            </header>
+        );
+
+        const AddItemForm = ({ onSubmit, onSearchClick }) => {
+            const [formData, setFormData] = useState({
+                name: '',
+                link: '',
+                status: 'later'
+            });
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (formData.name && formData.link) {
+                    onSubmit(formData);
+                    setFormData({ name: '', link: '', status: 'later' });
+                }
+            };
+
+            return (
+                <GlassCard className="mb-6">
+                    <h2 className="text-2xl font-bold text-white mb-4">Add New Item</h2>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-cosmic-200 mb-2">Title</label>
+                                <input
+                                    type="text"
+                                    value={formData.name}
+                                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-cosmic-200 focus:outline-none focus:ring-2 focus:ring-cosmic-500 transition-all"
+                                    placeholder="e.g., One Piece, Solo Leveling"
+                                />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-medium text-cosmic-200 mb-2">Link</label>
+                                <input
+                                    type="url"
+                                    value={formData.link}
+                                    onChange={(e) => setFormData(prev => ({ ...prev, link: e.target.value }))}
+                                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-cosmic-200 focus:outline-none focus:ring-2 focus:ring-cosmic-500 transition-all"
+                                    placeholder="https://example.com"
+                                />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-medium text-cosmic-200 mb-2">Status</label>
+                                <select
+                                    value={formData.status}
+                                    onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value }))}
+                                    className="w-full px-4 py-3 bg-cosmic-700 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cosmic-500 transition-all"
+                                >
+                                    <option value="watching">Watching/Reading</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="later">Watch Later</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div className="flex gap-4 justify-end">
+                            <AnimatedButton 
+                                type="button" 
+                                variant="secondary"
+                                onClick={onSearchClick}
+                                className="flex items-center gap-2"
+                            >
+                                🔍 Search Details
+                            </AnimatedButton>
+                            
+                            <AnimatedButton type="submit" className="flex items-center gap-2">
+                                ➕ Add to List
+                            </AnimatedButton>
+                        </div>
+                    </form>
+                </GlassCard>
+            );
+        };
+
+        const StatsDashboard = ({ items, achievements }) => {
+            const stats = {
+                total: items.length,
+                completed: items.filter(item => item.status === 'completed').length,
+                watching: items.filter(item => item.status === 'watching').length,
+                achievements
+            };
+
+            const StatCard = ({ value, label, color }) => (
+                <div className="text-center p-4 bg-white/5 rounded-lg border border-white/10">
+                    <div className={`text-3xl font-bold ${color} mb-1`}>{value}</div>
+                    <div className="text-cosmic-200 text-sm">{label}</div>
+                </div>
+            );
+
+            return (
+                <GlassCard className="mb-6">
+                    <h3 className="text-xl font-bold text-white mb-4">📊 Your Statistics</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <StatCard value={stats.total} label="Total Items" color="text-cosmic-300" />
+                        <StatCard value={stats.completed} label="Completed" color="text-green-400" />
+                        <StatCard value={stats.watching} label="In Progress" color="text-blue-400" />
+                        <StatCard value={stats.achievements} label="Achievements" color="text-yellow-400" />
+                    </div>
+                </GlassCard>
+            );
+        };
+
+        const ItemsGrid = ({ items, currentFilter, onFilterChange, onEdit, onDelete, onShowDetails }) => {
+            const FilterButton = ({ filter, children }) => (
+                <button
+                    onClick={() => onFilterChange(filter)}
+                    className={`px-4 py-2 rounded-full font-medium transition-all ${
+                        currentFilter === filter
+                            ? 'bg-gradient-to-r from-cosmic-500 to-cosmic-600 text-white'
+                            : 'bg-white/10 text-cosmic-200 hover:bg-white/20'
+                    }`}
+                >
+                    {children}
+                </button>
+            );
+
+            if (items.length === 0) {
+                return (
+                    <GlassCard>
+                        <div className="text-center py-12">
+                            <div className="text-6xl mb-4 opacity-50">📚</div>
+                            <h3 className="text-xl font-bold text-white mb-2">No items found</h3>
+                            <p className="text-cosmic-200">Try changing your filter or add new items.</p>
+                        </div>
+                    </GlassCard>
+                );
+            }
+
+            return (
+                <div>
+                    <div className="flex gap-2 mb-6 flex-wrap">
+                        <FilterButton filter="all">All Items</FilterButton>
+                        <FilterButton filter="watching">Watching/Reading</FilterButton>
+                        <FilterButton filter="completed">Completed</FilterButton>
+                        <FilterButton filter="later">Watch Later</FilterButton>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {items.map(item => (
+                            <GlassCard key={item.id} className="transform transition-all duration-300 hover:scale-105">
+                                <div className="flex justify-between items-start mb-3">
+                                    <h3 className="text-lg font-bold text-white truncate">{item.name}</h3>
+                                    <StatusBadge status={item.status} />
+                                </div>
+                                
+                                <a 
+                                    href={item.link} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-cosmic-300 hover:text-cosmic-200 text-sm block mb-4 truncate"
+                                >
+                                    {item.link}
+                                </a>
+                                
+                                <div className="flex justify-between items-center text-sm text-cosmic-200 mb-4">
+                                    <span>Added: {new Date(item.dateAdded).toLocaleDateString()}</span>
+                                </div>
+                                
+                                <div className="flex gap-2 justify-end">
+                                    <AnimatedButton 
+                                        variant="secondary" 
+                                        className="text-sm py-2"
+                                        onClick={() => onShowDetails(item)}
+                                    >
+                                        Details
+                                    </AnimatedButton>
+                                    <AnimatedButton 
+                                        variant="secondary" 
+                                        className="text-sm py-2"
+                                        onClick={() => onEdit(item.id, { status: prompt('New status (watching/completed/later):') || item.status })}
+                                    >
+                                        Edit
+                                    </AnimatedButton>
+                                    <AnimatedButton 
+                                        variant="danger" 
+                                        className="text-sm py-2"
+                                        onClick={() => onDelete(item.id)}
+                                    >
+                                        Delete
+                                    </AnimatedButton>
+                                </div>
+                            </GlassCard>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const SearchModal = ({ isOpen, onClose, onMediaSelect, onMediaDetails }) => {
+            const [query, setQuery] = useState('');
+            const [results, setResults] = useState([]);
+            const [isLoading, setIsLoading] = useState(false);
+
+            useEffect(() => {
+                if (query.length > 2) {
+                    const searchTimeout = setTimeout(async () => {
+                        setIsLoading(true);
+                        const data = await searchMedia(query);
+                        setResults(data);
+                        setIsLoading(false);
+                    }, 500);
+
+                    return () => clearTimeout(searchTimeout);
+                } else {
+                    setResults([]);
+                }
+            }, [query]);
+
+            if (!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="glass rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden bg-cosmic-800/80">
+                        <div className="p-6 border-b border-white/10">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-2xl font-bold text-white">Search Anime & Manga</h2>
+                                <button onClick={onClose} className="text-cosmic-200 hover:text-white transition-colors">
+                                    ✕
+                                </button>
+                            </div>
+                            
+                            <div className="relative">
+                                <div className="absolute left-3 top-3 text-cosmic-300">🔍</div>
+                                <input
+                                    type="text"
+                                    value={query}
+                                    onChange={(e) => setQuery(e.target.value)}
+                                    placeholder="Search for anime, manga, manhua, or manhwa..."
+                                    className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-cosmic-200 focus:outline-none focus:ring-2 focus:ring-cosmic-500 transition-all"
+                                    autoFocus
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="p-4 max-h-96 overflow-y-auto">
+                            {isLoading ? (
+                                <div className="text-center py-8">
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cosmic-500 mx-auto"></div>
+                                </div>
+                            ) : results.length > 0 ? (
+                                <div className="space-y-3">
+                                    {results.map((item) => (
+                                        <div key={item.mal_id} className="flex items-center gap-4 p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-all group">
+                                            <img 
+                                                src={item.images?.jpg?.image_url} 
+                                                alt={item.title}
+                                                className="w-12 h-16 object-cover rounded"
+                                            />
+                                            <div className="flex-1">
+                                                <h3 className="text-white font-semibold group-hover:text-cosmic-300 transition-colors">
+                                                    {item.title}
+                                                </h3>
+                                                <p className="text-cosmic-200 text-sm">
+                                                    {item.type?.toUpperCase()} • {item.type === 'anime' ? `${item.episodes || '?'} episodes` : `${item.chapters || '?'} chapters`} • Score: {item.score || 'N/A'}
+                                                </p>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <AnimatedButton 
+                                                    variant="secondary" 
+                                                    className="text-sm py-1 px-3"
+                                                    onClick={() => onMediaSelect(item)}
+                                                >
+                                                    Add
+                                                </AnimatedButton>
+                                                <AnimatedButton 
+                                                    variant="primary" 
+                                                    className="text-sm py-1 px-3"
+                                                    onClick={() => onMediaDetails(item)}
+                                                >
+                                                    Details
+                                                </AnimatedButton>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : query ? (
+                                <div className="text-center py-8 text-cosmic-200">
+                                    No results found for "{query}"
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const DetailsModal = ({ isOpen, onClose, media, onAddToList }) => {
+            const [details, setDetails] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+
+            useEffect(() => {
+                if (media && isOpen) {
+                    setIsLoading(true);
+                    getMediaDetails(media.mal_id, media.type).then(data => {
+                        setDetails(data);
+                        setIsLoading(false);
+                    });
+                }
+            }, [media, isOpen]);
+
+            if (!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="glass rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden bg-cosmic-800/80">
+                        <div className="p-6 border-b border-white/10">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-2xl font-bold text-white">Media Details</h2>
+                                <button onClick={onClose} className="text-cosmic-200 hover:text-white transition-colors">
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="p-6 max-h-[70vh] overflow-y-auto">
+                            {isLoading ? (
+                                <div className="text-center py-8">
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cosmic-500 mx-auto"></div>
+                                </div>
+                            ) : details ? (
+                                <div>
+                                    <div className="flex flex-col md:flex-row gap-6 mb-6">
+                                        <img 
+                                            src={details.images?.jpg?.large_image_url} 
+                                            alt={details.title}
+                                            className="w-full md:w-64 h-80 object-cover rounded-lg"
+                                        />
+                                        <div className="flex-1">
+                                            <h2 className="text-3xl font-bold text-white mb-4">{details.title}</h2>
+                                            <div className="flex gap-2 mb-4 flex-wrap">
+                                                <span className="px-3 py-1 bg-cosmic-500/20 text-cosmic-300 rounded-full text-sm">
+                                                    {details.type?.toUpperCase()}
+                                                </span>
+                                                <span className="px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-sm">
+                                                    {details.status}
+                                                </span>
+                                                <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 rounded-full text-sm">
+                                                    Score: {details.score || 'N/A'}
+                                                </span>
+                                            </div>
+                                            <p className="text-cosmic-200 leading-relaxed">
+                                                {details.synopsis || 'No synopsis available.'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                        <div className="text-center p-4 bg-white/5 rounded-lg">
+                                            <div className="text-2xl font-bold text-cosmic-300">{details.episodes || details.chapters || '?'}</div>
+                                            <div className="text-cosmic-200 text-sm">{details.type === 'anime' ? 'Episodes' : 'Chapters'}</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-white/5 rounded-lg">
+                                            <div className="text-2xl font-bold text-cosmic-300">{details.rank || 'N/A'}</div>
+                                            <div className="text-cosmic-200 text-sm">Rank</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-white/5 rounded-lg">
+                                            <div className="text-2xl font-bold text-cosmic-300">{details.popularity || 'N/A'}</div>
+                                            <div className="text-cosmic-200 text-sm">Popularity</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-white/5 rounded-lg">
+                                            <div className="text-2xl font-bold text-cosmic-300">{details.favorites || 'N/A'}</div>
+                                            <div className="text-cosmic-200 text-sm">Favorites</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="flex justify-end">
+                                        <AnimatedButton 
+                                            onClick={() => onAddToList(details)}
+                                            className="flex items-center gap-2"
+                                        >
+                                            ➕ Add to My List
+                                        </AnimatedButton>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center py-8 text-cosmic-200">
+                                    Error loading details
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AchievementToast = ({ achievement, onClose }) => {
+            if (!achievement) return null;
+
+            const achievementInfo = ACHIEVEMENTS.find(a => a.id === achievement);
+
+            return (
+                <div className="fixed top-4 right-4 glass p-4 rounded-lg border-l-4 border-green-500 transform animate-float z-50 max-w-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="text-2xl">{achievementInfo?.icon}</div>
+                        <div>
+                            <h4 className="font-bold text-white">🎉 Achievement Unlocked!</h4>
+                            <p className="text-cosmic-200 text-sm">{achievementInfo?.name}: {achievementInfo?.description}</p>
+                        </div>
+                        <button onClick={onClose} className="text-cosmic-200 hover:text-white ml-2">
+                            ✕
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        // Main App Component
+        const App = () => {
+            const [items, setItems] = useLocalStorage('mangaAnimeItems', []);
+            const [achievements, setAchievements] = useLocalStorage('mangaAnimeAchievements', []);
+            const [currentFilter, setCurrentFilter] = useState('all');
+            const [isSearchOpen, setIsSearchOpen] = useState(false);
+            const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+            const [selectedMedia, setSelectedMedia] = useState(null);
+            const [unlockedAchievement, setUnlockedAchievement] = useState(null);
+
+            const filteredItems = currentFilter === 'all' 
+                ? items 
+                : items.filter(item => item.status === currentFilter);
+
+            const handleUnlockAchievement = useCallback((achievementId) => {
+                setAchievements(prev => [...prev, achievementId]);
+                setUnlockedAchievement(achievementId);
+                setTimeout(() => setUnlockedAchievement(null), 5000);
+            }, [setAchievements]);
+
+            useAchievements(items, achievements, handleUnlockAchievement);
+
+            const addItem = (itemData) => {
+                const newItem = MediaItem(
+                    Date.now().toString(),
+                    itemData.name,
+                    itemData.link,
+                    itemData.status,
+                    new Date().toISOString()
+                );
+                setItems(prev => [...prev, newItem]);
+            };
+
+            const deleteItem = (id) => {
+                setItems(prev => prev.filter(item => item.id !== id));
+            };
+
+            const editItem = (id, updates) => {
+                setItems(prev => prev.map(item => 
+                    item.id === id ? { ...item, ...updates } : item
+                ));
+            };
+
+            const handleMediaSelect = (media) => {
+                addItem({
+                    name: media.title,
+                    link: media.url,
+                    status: 'later'
+                });
+                setIsSearchOpen(false);
+            };
+
+            const handleMediaDetails = (media) => {
+                setSelectedMedia(media);
+                setIsDetailsOpen(true);
+                setIsSearchOpen(false);
+            };
+
+            const handleAddFromDetails = (media) => {
+                addItem({
+                    name: media.title,
+                    link: media.url,
+                    status: 'later'
+                });
+                setIsDetailsOpen(false);
+            };
+
+            return (
+                <div className="container mx-auto px-4 py-8">
+                    <Header />
+                    
+                    <div className="glass rounded-2xl shadow-2xl overflow-hidden">
+                        <AddItemForm 
+                            onSubmit={addItem} 
+                            onSearchClick={() => setIsSearchOpen(true)} 
+                        />
+                        
+                        <StatsDashboard items={items} achievements={achievements.length} />
+                        
+                        <div className="p-6">
+                            <ItemsGrid
+                                items={filteredItems}
+                                currentFilter={currentFilter}
+                                onFilterChange={setCurrentFilter}
+                                onEdit={editItem}
+                                onDelete={deleteItem}
+                                onShowDetails={(item) => {
+                                    // Simple details show for existing items
+                                    alert(`Details for: ${item.name}\nStatus: ${item.status}\nLink: ${item.link}`);
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    <SearchModal
+                        isOpen={isSearchOpen}
+                        onClose={() => setIsSearchOpen(false)}
+                        onMediaSelect={handleMediaSelect}
+                        onMediaDetails={handleMediaDetails}
+                    />
+
+                    <DetailsModal
+                        isOpen={isDetailsOpen}
+                        onClose={() => setIsDetailsOpen(false)}
+                        media={selectedMedia}
+                        onAddToList={handleAddFromDetails}
+                    />
+
+                    <AchievementToast 
+                        achievement={unlockedAchievement} 
+                        onClose={() => setUnlockedAchievement(null)} 
+                    />
+                </div>
+            );
+        };
+
+        // Render the app
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
